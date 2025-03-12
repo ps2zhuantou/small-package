@@ -2,10 +2,49 @@
 'require form';
 'require poll';
 'require uci';
+'require ui';
 'require view';
 
 'require fchomo as hm';
 'require tools.widgets as widgets';
+
+function parseProxyGroupYaml(field, name, cfg) {
+	if (!cfg.type)
+		return null;
+
+	// key mapping
+	let config = hm.removeBlankAttrs({
+		id: cfg.hm_id,
+		label: cfg.hm_label,
+		type: cfg.type,
+		groups: cfg.proxies ? cfg.proxies.map((grop) => hm.preset_outbound.full.map(([key, label]) => key).includes(grop) ? grop : this.calcID(hm.glossary["proxy_group"].field, grop)) : null, // array
+		use: cfg.use ? cfg.use.map((prov) => this.calcID(hm.glossary["provider"].field, prov)) : null, // array
+		include_all: hm.bool2str(cfg["include-all"]), // bool
+		include_all_proxies: hm.bool2str(cfg["include-all-proxies"]), // bool
+		include_all_providers: hm.bool2str(cfg["include-all-providers"]), // bool
+		// Url-test fields
+		tolerance: cfg.tolerance,
+		// Load-balance fields
+		strategy: cfg.strategy,
+		// Override fields
+		disable_udp: hm.bool2str(cfg["disable-udp"]), // bool
+		// Health fields
+		url: cfg.url,
+		interval: cfg.interval,
+		timeout: cfg.timeout,
+		lazy: hm.bool2str(cfg.lazy), // bool
+		expected_status: cfg["expected-status"],
+		max_failed_times: cfg["max-failed-times"],
+		// General fields
+		filter: [cfg.filter], // array.string: string
+		exclude_filter: [cfg["exclude-filter"]], // array.string: string
+		exclude_type: [cfg["exclude-type"]], // array.string: string
+		hidden: hm.bool2str(cfg.hidden), // bool
+		icon: cfg.icon
+	});
+
+	return config;
+}
 
 function loadDNSServerLabel(section_id) {
 	delete this.keylist;
@@ -608,17 +647,83 @@ return view.extend({
 		o.default = o.disabled;
 
 		/* Proxy Group */
-		o = s.taboption('group', form.SectionValue, '_group', form.GridSection, 'proxy_group', null);
+		o = s.taboption('group', form.SectionValue, '_group', hm.GridSection, 'proxy_group', null);
 		ss = o.subsection;
-		var prefmt = { 'prefix': 'group_', 'suffix': '' };
 		ss.addremove = true;
 		ss.rowcolors = true;
 		ss.sortable = true;
 		ss.nodescriptions = true;
-		ss.modaltitle = L.bind(hm.loadModalTitle, ss, _('Proxy Group'), _('Add a proxy group'));
-		ss.sectiontitle = L.bind(hm.loadDefaultLabel, ss);
-		ss.renderSectionAdd = L.bind(hm.renderSectionAdd, ss, prefmt, true);
-		ss.handleAdd = L.bind(hm.handleAdd, ss, prefmt);
+		ss.hm_modaltitle = [ _('Proxy Group'), _('Add a proxy group') ];
+		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
+		ss.hm_field  = hm.glossary[ss.sectiontype].field;
+		ss.hm_lowcase_only = true;
+		/* Import mihomo config start */
+		ss.handleYamlImport = function() {
+			const field = this.hm_field;
+			const o = new hm.HandleImport(this.map, this, _('Import mihomo config'),
+				_('Please type <code>%s</code> fields of mihomo config.</br>')
+					.format(field));
+			o.placeholder = 'proxy-groups:\n' +
+							'- name: "auto"\n' +
+							'  type: url-test\n' +
+							'  proxies:\n' +
+							'    - ss1\n' +
+							'    - ss2\n' +
+							'    - vmess1\n' +
+							'  tolerance: 150\n' +
+							'  lazy: true\n' +
+							'  expected-status: 204\n' +
+							'  url: "https://cp.cloudflare.com/generate_204"\n' +
+							'  interval: 300\n' +
+							'  timeout: 5000\n' +
+							'  max-failed-times: 5\n' +
+							'- name: "fallback-auto"\n' +
+							'  type: fallback\n' +
+							'  proxies:\n' +
+							'    - DIRECT\n' +
+							'    - auto\n' +
+							'  url: "https://cp.cloudflare.com/generate_204"\n' +
+							'  interval: 300\n' +
+							'- name: "load-balance"\n' +
+							'  type: load-balance\n' +
+							'  include-all: true\n' +
+							'  url: "https://cp.cloudflare.com/generate_204"\n' +
+							'  interval: 300\n' +
+							'  lazy: false\n' +
+							'  strategy: consistent-hashin\n' +
+							'- name: AllProxy\n' +
+							'  type: select\n' +
+							'  disable-udp: true\n' +
+							'  include-all-proxies: true\n' +
+							'  use:\n' +
+							'    - provider1\n' +
+							'- name: AllProvider\n' +
+							'  type: select\n' +
+							'  include-all-providers: true\n' +
+							'  filter: "(?i)港|hk|hongkong|hong kong"\n' +
+							'  exclude-filter: "美|日"\n' +
+							'  exclude-type: "Shadowsocks|Http"\n' +
+							'  ...'
+			o.parseYaml = function(field, name, cfg) {
+				let config = hm.HandleImport.prototype.parseYaml.call(this, field, name, cfg);
+
+				return config ? parseProxyGroupYaml.call(this, field, name, config) : config;
+			};
+
+			return o.render();
+		}
+		ss.renderSectionAdd = function(/* ... */) {
+			let el = hm.GridSection.prototype.renderSectionAdd.apply(this, arguments);
+
+			el.appendChild(E('button', {
+				'class': 'cbi-button cbi-button-add',
+				'title': _('mihomo config'),
+				'click': ui.createHandlerFn(this, 'handleYamlImport')
+			}, [ _('Import mihomo config') ]));
+
+			return el;
+		}
+		/* Import mihomo config end */
 
 		ss.tab('field_general', _('General fields'));
 		ss.tab('field_override', _('Override fields'));
@@ -816,17 +921,16 @@ return view.extend({
 		s.tab('rules', _('Routing rule'));
 
 		/* Routing rules */
-		o = s.taboption('rules', form.SectionValue, '_rules', form.GridSection, 'rules', null);
+		o = s.taboption('rules', form.SectionValue, '_rules', hm.GridSection, 'rules', null);
 		ss = o.subsection;
-		var prefmt = { 'prefix': '', 'suffix': '_host' };
 		ss.addremove = true;
 		ss.rowcolors = true;
 		ss.sortable = true;
 		ss.nodescriptions = true;
-		ss.modaltitle = L.bind(hm.loadModalTitle, ss, _('Routing rule'), _('Add a routing rule'));
-		ss.sectiontitle = L.bind(hm.loadDefaultLabel, ss);
-		ss.renderSectionAdd = L.bind(hm.renderSectionAdd, ss, prefmt, false);
-		ss.handleAdd = L.bind(hm.handleAdd, ss, prefmt);
+		ss.hm_modaltitle = [ _('Routing rule'), _('Add a routing rule') ];
+		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
+		ss.hm_field  = hm.glossary[ss.sectiontype].field;
+		ss.hm_lowcase_only = false;
 
 		so = ss.option(form.Value, 'label', _('Label'));
 		so.load = L.bind(hm.loadDefaultLabel, so);
@@ -868,17 +972,16 @@ return view.extend({
 		s.tab('subrules', _('Sub rule'));
 
 		/* Sub rules */
-		o = s.taboption('subrules', form.SectionValue, '_subrules', form.GridSection, 'subrules', null);
+		o = s.taboption('subrules', form.SectionValue, '_subrules', hm.GridSection, 'subrules', null);
 		ss = o.subsection;
-		var prefmt = { 'prefix': '', 'suffix': '_subhost' };
 		ss.addremove = true;
 		ss.rowcolors = true;
 		ss.sortable = true;
 		ss.nodescriptions = true;
-		ss.modaltitle = L.bind(hm.loadModalTitle, ss, _('Sub rule'), _('Add a sub rule'));
-		ss.sectiontitle = L.bind(hm.loadDefaultLabel, ss);
-		ss.renderSectionAdd = L.bind(hm.renderSectionAdd, ss, prefmt, false);
-		ss.handleAdd = L.bind(hm.handleAdd, ss, prefmt);
+		ss.hm_modaltitle = [ _('Sub rule'), _('Add a sub rule') ];
+		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
+		ss.hm_field  = hm.glossary[ss.sectiontype].field;
+		ss.hm_lowcase_only = false;
 
 		so = ss.option(form.Value, 'label', _('Label'));
 		so.load = L.bind(hm.loadDefaultLabel, so);
@@ -955,17 +1058,16 @@ return view.extend({
 		s.tab('dns_server', _('DNS server'));
 
 		/* DNS server */
-		o = s.taboption('dns_server', form.SectionValue, '_dns_server', form.GridSection, 'dns_server', null);
+		o = s.taboption('dns_server', form.SectionValue, '_dns_server', hm.GridSection, 'dns_server', null);
 		ss = o.subsection;
-		var prefmt = { 'prefix': 'dns_', 'suffix': '' };
 		ss.addremove = true;
 		ss.rowcolors = true;
 		ss.sortable = true;
 		ss.nodescriptions = true;
-		ss.modaltitle = L.bind(hm.loadModalTitle, ss, _('DNS server'), _('Add a DNS server'));
-		ss.sectiontitle = L.bind(hm.loadDefaultLabel, ss);
-		ss.renderSectionAdd = L.bind(hm.renderSectionAdd, ss, prefmt, true);
-		ss.handleAdd = L.bind(hm.handleAdd, ss, prefmt);
+		ss.hm_modaltitle = [ _('DNS server'), _('Add a DNS server') ];
+		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
+		ss.hm_field  = hm.glossary[ss.sectiontype].field;
+		ss.hm_lowcase_only = true;
 
 		so = ss.option(form.Value, 'label', _('Label'));
 		so.load = L.bind(hm.loadDefaultLabel, so);
@@ -1096,17 +1198,16 @@ return view.extend({
 		s.tab('dns_policy', _('DNS policy'));
 
 		/* DNS policy */
-		o = s.taboption('dns_policy', form.SectionValue, '_dns_policy', form.GridSection, 'dns_policy', null);
+		o = s.taboption('dns_policy', form.SectionValue, '_dns_policy', hm.GridSection, 'dns_policy', null);
 		ss = o.subsection;
-		var prefmt = { 'prefix': '', 'suffix': '_domain' };
 		ss.addremove = true;
 		ss.rowcolors = true;
 		ss.sortable = true;
 		ss.nodescriptions = true;
-		ss.modaltitle = L.bind(hm.loadModalTitle, ss, _('DNS policy'), _('Add a DNS policy'));
-		ss.sectiontitle = L.bind(hm.loadDefaultLabel, ss);
-		ss.renderSectionAdd = L.bind(hm.renderSectionAdd, ss, prefmt, false);
-		ss.handleAdd = L.bind(hm.handleAdd, ss, prefmt);
+		ss.hm_modaltitle = [ _('DNS policy'), _('Add a DNS policy') ];
+		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
+		ss.hm_field  = hm.glossary[ss.sectiontype].field;
+		ss.hm_lowcase_only = false;
 
 		so = ss.option(form.Value, 'label', _('Label'));
 		so.load = L.bind(hm.loadDefaultLabel, so);
