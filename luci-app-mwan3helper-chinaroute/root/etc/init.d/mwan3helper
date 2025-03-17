@@ -36,16 +36,33 @@ EOF
     ip rule del table 200 
     ip rule add table 200 fwmark 200
     
+    # PREROUTING rules for LAN traffic
     iptables -t mangle -D PREROUTING -i br-lan -j MARK --set-mark 200
-    iptables -t mangle -D PREROUTING -i br-lan -m set --match-set cn dst  -j MARK --set-mark 0
-    iptables -t mangle -D PREROUTING -s $dns   -j MARK --set-mark 0
-    iptables -t mangle -D PREROUTING -i br-lan  -m set --match-set gfwlist dst  -j MARK --set-mark 200
+    iptables -t mangle -D PREROUTING -i br-lan -m set --match-set cn dst -j MARK --set-mark 0
+    iptables -t mangle -D PREROUTING -s $dns -j MARK --set-mark 0
+    iptables -t mangle -D PREROUTING -i br-lan -m set --match-set gfwlist dst -j MARK --set-mark 200
+    
+    # OUTPUT rules for router itself
+    iptables -t mangle -D OUTPUT -j MARK --set-mark 200
+    iptables -t mangle -D OUTPUT -m set --match-set cn dst -j MARK --set-mark 0
+    iptables -t mangle -D OUTPUT -s $dns -j MARK --set-mark 0
+    iptables -t mangle -D OUTPUT -m set --match-set gfwlist dst -j MARK --set-mark 200
+
     if [ $mode -eq 0 ];  then
-    iptables -t mangle -A PREROUTING -i br-lan -j MARK --set-mark 200
-    iptables -t mangle -A PREROUTING -i br-lan -m set --match-set cn dst  -j MARK --set-mark 0
+      # PREROUTING for mode 0
+      iptables -t mangle -A PREROUTING -i br-lan -j MARK --set-mark 200
+      iptables -t mangle -A PREROUTING -i br-lan -m set --match-set cn dst -j MARK --set-mark 0
+      # OUTPUT for mode 0
+      iptables -t mangle -A OUTPUT -j MARK --set-mark 200
+      iptables -t mangle -A OUTPUT -m set --match-set cn dst -j MARK --set-mark 0
     fi
-    iptables -t mangle -A PREROUTING -i br-lan -m set --match-set gfwlist dst  -j MARK --set-mark 200
-    iptables -t mangle -A PREROUTING -s $dns   -j MARK --set-mark 0
+    
+    # Common rules for both PREROUTING and OUTPUT
+    iptables -t mangle -A PREROUTING -i br-lan -m set --match-set gfwlist dst -j MARK --set-mark 200
+    iptables -t mangle -A PREROUTING -s $dns -j MARK --set-mark 0
+    iptables -t mangle -A OUTPUT -m set --match-set gfwlist dst -j MARK --set-mark 200
+    iptables -t mangle -A OUTPUT -s $dns -j MARK --set-mark 0
+    
     sed -i '/\/etc\/init.d\/mwan3helper start/d' /etc/firewall.user
     echo "/etc/init.d/mwan3helper start" >> /etc/firewall.user
     ipset add gfwlist 91.108.4.0/22
@@ -58,26 +75,31 @@ EOF
 }
 
 stop_service(){
-	rm -f /tmp/dnsmasq.d/dnsmasq-mwan3.conf
-    /etc/init.d/dnsmasq restart
-    dns=$(uci get mwan3helper.config.dns 2>/dev/null)
-    dev=$(uci get mwan3helper.config.dev 2>/dev/null)
-    ip route del default table 200
+  rm -f /tmp/dnsmasq.d/dnsmasq-mwan3.conf
+  /etc/init.d/dnsmasq restart
+  dns=$(uci get mwan3helper.config.dns 2>/dev/null)
+  dev=$(uci get mwan3helper.config.dev 2>/dev/null)
+  ip route del default table 200
 
-    ip rule del table 200 
-     iptables -t mangle -D PREROUTING -i br-lan -j MARK --set-mark 200
-    iptables -t mangle -D PREROUTING -i br-lan -m set --match-set cn dst  -j MARK --set-mark 0
-    iptables -t mangle -D PREROUTING -s $dns   -j MARK --set-mark 0
-    iptables -t mangle -D PREROUTING -i br-lan  -m set --match-set gfwlist dst  -j MARK --set-mark 200
-    sed -i '/\/etc\/init.d\/mwan3helper start/d' /etc/firewall.user
-    
+  ip rule del table 200 
+  # Clean PREROUTING rules
+  iptables -t mangle -D PREROUTING -i br-lan -j MARK --set-mark 200
+  iptables -t mangle -D PREROUTING -i br-lan -m set --match-set cn dst -j MARK --set-mark 0
+  iptables -t mangle -D PREROUTING -s $dns -j MARK --set-mark 0
+  iptables -t mangle -D PREROUTING -i br-lan -m set --match-set gfwlist dst -j MARK --set-mark 200
+  # Clean OUTPUT rules
+  iptables -t mangle -D OUTPUT -j MARK --set-mark 200
+  iptables -t mangle -D OUTPUT -m set --match-set cn dst -j MARK --set-mark 0
+  iptables -t mangle -D OUTPUT -s $dns -j MARK --set-mark 0
+  iptables -t mangle -D OUTPUT -m set --match-set gfwlist dst -j MARK --set-mark 200
+  sed -i '/\/etc\/init.d\/mwan3helper start/d' /etc/firewall.user
 }
 
 reload_service() {
-	stop
-	start
+  stop
+  start
 }
 
 service_triggers() {
-	procd_add_reload_trigger "mwan3helper"
+  procd_add_reload_trigger "mwan3helper"
 }
